@@ -1393,7 +1393,8 @@ contains
             call log_info("Adding "//self%products%species_names(ng+cond_idx))
             return
         else
-            call abort('EqSolver_test_condensed: Re-insertion of '//self%products%species_names(ng+singular_index_)//' likely to cause singular matrix.')
+            call abort('EqSolver_test_condensed: Re-insertion of '// &
+                self%products%species_names(ng+singular_index_)//' likely to cause singular matrix.')
         end if
 
     end subroutine
@@ -1486,7 +1487,8 @@ contains
 
         ! Compute the mole and mass fractions
         soln%mole_fractions = soln%nj / sum(soln%nj)
-        soln%mass_fractions = soln%nj * self%products%species%molecular_weight / sum(soln%nj * self%products%species%molecular_weight)
+        soln%mass_fractions = soln%nj * self%products%species%molecular_weight / &
+            sum(soln%nj * self%products%species%molecular_weight)
 
         ! Add mixture properties
         soln%pressure = soln%calc_pressure()
