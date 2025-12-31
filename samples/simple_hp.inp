@@ -1,0 +1,10 @@
+# 'problem' dataset:
+   problem case=simple hp  p(atm)=1
+# 'reactants' dataset:
+   reac
+     fuel= H2  moles = 1. t(k)= 2000.0
+     oxid= O2  moles = 1. t(k)= 2000.0
+# 'only' dataset:
+   only  H   H2   H2O  O  O2  OH
+# 'end' dataset
+   end

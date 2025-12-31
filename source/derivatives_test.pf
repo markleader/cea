@@ -1,0 +1,175 @@
+module derivatives_test
+    use funit
+    use cea_equilibrium
+    use cea_thermo
+    use cea_mixture
+    use cea_derivatives
+    use cea_units
+    use cea_param, only: R=>gas_constant
+
+    type(ThermoDB) :: all_thermo
+
+contains
+
+    @before
+    subroutine setup_mixture()
+        all_thermo = read_thermo('data/thermo.lib')
+    end subroutine
+
+    @test
+    subroutine test_d_dP()
+
+        type(Mixture) :: products
+        type(Mixture) :: reactants
+        type(EqSolver) :: solver1, solver2
+        type(EqSolution) :: solution1, solution2
+        type(EqTotals) :: totals
+        type(EqTotals) :: totals_fd
+        real(dp) :: h_reac, p_reac, weights(2)
+        real(dp), parameter :: tol = 1.0d-6
+
+        reactants = Mixture(all_thermo, ['H2', 'O2'])
+        products  = Mixture(all_thermo, ['H  ', 'H2 ', 'H2O', 'O  ', 'O2 ', 'OH '])
+
+        solver1 = EqSolver(products, reactants)
+        solution1 = EqSolution(solver1)
+
+        solver2 = EqSolver(products, reactants)
+        solution2 = EqSolution(solver2)
+
+        ! Get the species weights
+        weights = reactants%weights_from_moles([1.0d0, 1.0d0])
+
+        ! Get the constraint values
+        h_reac = reactants%calc_enthalpy(weights, 2000.0d0)/R
+        p_reac = 1.01325d0
+
+        ! Initial solve
+        call solver1%solve(solution1, 'hp', h_reac, p_reac, weights)
+        call solver2%solve(solution2, 'hp', h_reac, p_reac+tol, weights)
+
+        write(*,*) 'FD dnj_dstate2: ', (solution2%nj - solution1%nj)/tol
+        write(*,*) 'FD dT_dstate2: ', (solution2%T - solution1%T)/tol
+        write(*,*) 'FD dn_dstate2: ', (solution2%n - solution1%n)/tol
+
+        ! Compute the total derivatives
+        totals = EqTotals(solver1, solution1)
+        call totals%compute_totals(weights)
+
+        ! Compare the values
+        @assertRelativelyEqual(totals%dT_dstate2, (solution2%T - solution1%T)/tol, tol)
+        @assertRelativelyEqual(totals%dn_dstate2, (solution2%n - solution1%n)/tol, tol)
+        @assertRelativelyEqual(totals%dnj_dstate2(1), (solution2%nj(1) - solution1%nj(1))/tol, tol)
+        @assertRelativelyEqual(totals%dnj_dstate2(2), (solution2%nj(2) - solution1%nj(2))/tol, tol)
+        @assertRelativelyEqual(totals%dnj_dstate2(3), (solution2%nj(3) - solution1%nj(3))/tol, tol)
+        @assertRelativelyEqual(totals%dnj_dstate2(4), (solution2%nj(4) - solution1%nj(4))/tol, tol)
+        @assertRelativelyEqual(totals%dnj_dstate2(5), (solution2%nj(5) - solution1%nj(5))/tol, tol)
+        @assertRelativelyEqual(totals%dnj_dstate2(6), (solution2%nj(6) - solution1%nj(6))/tol, tol)
+
+    end subroutine
+
+!     @test
+!     subroutine test_d_dh()
+
+!         type(Mixture) :: products
+!         type(Mixture) :: reactants
+!         type(EqSolver) :: solver1, solver2
+!         type(EqSolution) :: solution1, solution2
+!         type(EqTotals) :: totals
+!         type(EqTotals) :: totals_fd
+!         real(dp) :: h_reac, p_reac, weights(2)
+!         real(dp), parameter :: tol = 1.0d-6
+
+!         reactants = Mixture(all_thermo, ['H2', 'O2'])
+!         products  = Mixture(all_thermo, ['H  ', 'H2 ', 'H2O', 'O  ', 'O2 ', 'OH '])
+
+!         solver1 = EqSolver(products, reactants)
+!         solution1 = EqSolution(solver1)
+
+!         solver2 = EqSolver(products, reactants)
+!         solution2 = EqSolution(solver2)
+
+!         ! Get the species weights
+!         weights = reactants%weights_from_moles([1.0d0, 1.0d0])
+
+!         ! Get the constraint values
+!         h_reac = reactants%calc_enthalpy(weights, 2000.0d0)/R
+!         p_reac = 1.01325d0
+
+!         ! Initial solve
+!         call solver1%solve(solution1, 'hp', h_reac, p_reac, weights)
+!         call solver2%solve(solution2, 'hp', h_reac+tol, p_reac, weights)
+
+!         write(*,*) 'FD dnj_dstate1: ', (solution1%nj - solution1%nj)/tol
+!         write(*,*) 'FD dT_dstate1: ', (solution1%T - solution1%T)/tol
+!         write(*,*) 'FD dn_dstate1: ', (solution1%n - solution1%n)/tol
+
+!         ! Compute the total derivatives
+!         totals = EqTotals(solver1, solution1)
+!         call totals%compute_totals(weights)
+
+!         ! Compare the values
+!         @assertRelativelyEqual(totals%dT_dstate1, (solution2%T - solution1%T)/tol, tol)
+!         @assertRelativelyEqual(totals%dn_dstate1, (solution2%n - solution1%n)/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dstate1(1), (solution2%nj(1) - solution1%nj(1))/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dstate1(2), (solution2%nj(2) - solution1%nj(2))/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dstate1(3), (solution2%nj(3) - solution1%nj(3))/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dstate1(4), (solution2%nj(4) - solution1%nj(4))/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dstate1(5), (solution2%nj(5) - solution1%nj(5))/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dstate1(6), (solution2%nj(6) - solution1%nj(6))/tol, tol)
+
+!     end subroutine
+
+!     @test
+!     subroutine test_d_dweights()
+
+!         type(Mixture) :: products
+!         type(Mixture) :: reactants
+!         type(EqSolver) :: solver1, solver2
+!         type(EqSolution) :: solution1, solution2
+!         type(EqTotals) :: totals
+!         type(EqTotals) :: totals_fd
+!         real(dp) :: h_reac, p_reac, weights(2)
+!         real(dp), parameter :: tol = 1.0d-6
+
+!         reactants = Mixture(all_thermo, ['H2', 'O2'])
+!         products  = Mixture(all_thermo, ['H  ', 'H2 ', 'H2O', 'O  ', 'O2 ', 'OH '])
+
+!         solver1 = EqSolver(products, reactants)
+!         solution1 = EqSolution(solver1)
+
+!         solver2 = EqSolver(products, reactants)
+!         solution2 = EqSolution(solver2)
+
+!         ! Get the species weights
+!         weights = reactants%weights_from_moles([1.0d0, 1.0d0])
+
+!         ! Get the constraint values
+!         h_reac = reactants%calc_enthalpy(weights, 2000.0d0)/R
+!         p_reac = 1.01325d0
+
+!         ! Initial solve
+!         call solver1%solve(solution1, 'hp', h_reac, p_reac, weights)
+!         call solver2%solve(solution2, 'hp', h_reac, p_reac, weights+[tol, 0.0d0])
+
+!         write(*,*) 'FD dnj_dw1: ', (solution2%nj - solution1%nj)/tol
+!         write(*,*) 'FD dT_dw1: ', (solution2%T - solution1%T)/tol
+!         write(*,*) 'FD dn_dw1: ', (solution2%n - solution1%n)/tol
+
+!         ! Compute the total derivatives
+!         totals = EqTotals(solver1, solution1)
+!         call totals%compute_totals(weights)
+
+!         ! Compare the values
+!         @assertRelativelyEqual(totals%dT_dweights(1), (solution2%T - solution1%T)/tol, tol)
+!         @assertRelativelyEqual(totals%dn_dweights(1), (solution2%n - solution1%n)/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dweights(1, 1), (solution2%nj(1) - solution1%nj(1))/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dweights(2, 1), (solution2%nj(2) - solution1%nj(2))/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dweights(3, 1), (solution2%nj(3) - solution1%nj(3))/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dweights(4, 1), (solution2%nj(4) - solution1%nj(4))/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dweights(5, 1), (solution2%nj(5) - solution1%nj(5))/tol, tol)
+!         @assertRelativelyEqual(totals%dnj_dweights(6, 1), (solution2%nj(6) - solution1%nj(6))/tol, tol)
+
+!     end subroutine
+
+end module
