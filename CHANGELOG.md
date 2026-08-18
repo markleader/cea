@@ -5,6 +5,9 @@ All notable user-visible changes to this project are documented here.
 ## [Unreleased]
 
 ### Changed
+- Reworked equilibrium total-derivative post-processing as a vector-valued
+  response Jacobian and reused one Jacobian factorization across all direct
+  sensitivity right-hand sides.
 
 ### Fixed
 

@@ -89,6 +89,62 @@ contains
         @assertLessThan(maxval(abs(totals%dU_dw0_fd)), tol_zero)
     end subroutine
 
+    subroutine assert_response_derivative_matrix(totals, solver, solution)
+        type(EqDerivatives), intent(in) :: totals
+        type(EqSolver), intent(in) :: solver
+        type(EqSolution), intent(in) :: solution
+
+        integer :: i, idx_c, na, ns, ntheta
+        integer :: row_h, row_u, row_g, row_s, row_cp
+        real(dp), allocatable :: nj_active(:)
+
+        na = count(solution%is_active)
+        ns = solver%num_gas + na
+        ntheta = solver%num_reactants + 2
+        row_h = ns + 3
+        row_u = ns + 4
+        row_g = ns + 5
+        row_s = ns + 6
+        row_cp = ns + 7
+
+        @assertEqual(ns+7, size(totals%f))
+        @assertEqual(ns+7, size(totals%dfdtheta, 1))
+        @assertEqual(ntheta, size(totals%dfdtheta, 2))
+
+        allocate(nj_active(ns))
+        nj_active(:solver%num_gas) = solution%nj(:solver%num_gas)
+        idx_c = 0
+        do i = 1, solver%num_condensed
+            if (.not. solution%is_active(i)) cycle
+            idx_c = idx_c + 1
+            nj_active(solver%num_gas+idx_c) = solution%nj(solver%num_gas+i)
+        end do
+
+        @assertEqual(solution%T, totals%f(1))
+        @assertEqual(solution%n, totals%f(2))
+        @assertEqual(0.0d0, maxval(abs(nj_active-totals%f(3:ns+2))))
+        @assertEqual(solution%enthalpy, totals%f(row_h))
+        @assertEqual(solution%energy, totals%f(row_u))
+        @assertEqual(solution%gibbs_energy, totals%f(row_g))
+        @assertEqual(solution%entropy, totals%f(row_s))
+        @assertEqual(solution%cp_fr, totals%f(row_cp))
+
+        @assertEqual(totals%dT_dstate1, totals%dfdtheta(1, 1))
+        @assertEqual(totals%dT_dstate2, totals%dfdtheta(1, 2))
+        @assertEqual(0.0d0, maxval(abs(totals%dT_dw0-totals%dfdtheta(1, 3:ntheta))))
+        @assertEqual(totals%dn_dstate1, totals%dfdtheta(2, 1))
+        @assertEqual(totals%dn_dstate2, totals%dfdtheta(2, 2))
+        @assertEqual(0.0d0, maxval(abs(totals%dn_dw0-totals%dfdtheta(2, 3:ntheta))))
+        @assertEqual(0.0d0, maxval(abs(totals%dnj_dstate1-totals%dfdtheta(3:ns+2, 1))))
+        @assertEqual(0.0d0, maxval(abs(totals%dnj_dstate2-totals%dfdtheta(3:ns+2, 2))))
+        @assertEqual(0.0d0, maxval(abs(totals%dnj_dw0-totals%dfdtheta(3:ns+2, 3:ntheta))))
+        @assertEqual(totals%dH_dstate1, totals%dfdtheta(row_h, 1))
+        @assertEqual(totals%dU_dstate1, totals%dfdtheta(row_u, 1))
+        @assertEqual(totals%dG_dstate1, totals%dfdtheta(row_g, 1))
+        @assertEqual(totals%dS_dstate1, totals%dfdtheta(row_s, 1))
+        @assertEqual(totals%dCp_fr_dstate1, totals%dfdtheta(row_cp, 1))
+    end subroutine
+
     integer function find_smooth_target_species(solver, solution) result(idx_species)
         type(EqSolver), intent(in) :: solver
         type(EqSolution), intent(in) :: solution
@@ -134,6 +190,24 @@ contains
         end do
     end function
 
+    @test
+    subroutine test_direct_block_linear_solve()
+        real(dp) :: A(3, 3), B(3, 2), X(3, 2), X_expected(3, 2)
+        integer :: ierr
+
+        A(1, :) = [0.0d0, 2.0d0, 1.0d0]
+        A(2, :) = [2.0d0, 2.0d0, 3.0d0]
+        A(3, :) = [1.0d0, 4.0d0, 1.0d0]
+        X_expected(:, 1) = [1.0d0, -2.0d0, 3.0d0]
+        X_expected(:, 2) = [-4.0d0, 5.0d0, 6.0d0]
+        B = matmul(A, X_expected)
+
+        call solve_multiple_rhs(A, B, X, ierr)
+
+        @assertEqual(0, ierr)
+        @assertLessThan(maxval(abs(X-X_expected)), 1.0d-13)
+    end subroutine
+
     integer function find_target_w0(solution) result(idx_w0)
         type(EqSolution), intent(in) :: solution
 
@@ -161,6 +235,7 @@ contains
         if (present(check_cp_fr)) check_cp_fr_ = check_cp_fr
         call totals%compute_derivatives(solver, solution, check_closure_defect=.true.)
         call totals%unpack_values(solver, solution)
+        call assert_response_derivative_matrix(totals, solver, solution)
         call totals%compute_fd(solver, solution, h, verbose=.false., central=.true.)
 
         @assertLessThan(maxval(abs(totals%delta_check)), closure_tol)
