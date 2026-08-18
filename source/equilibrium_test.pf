@@ -240,11 +240,13 @@ contains
 
         @assertLessThan(maxval(abs(totals%delta_check)), closure_tol)
 
-        rel = relative_error(totals%dnj_dstate1(idx_species), totals%dnj_dstate1_fd(idx_species))
+        ! Derivatives close to zero are dominated by the nonlinear solver
+        ! tolerance in the finite-difference reference.
+        rel = relative_error(totals%dnj_dstate1(idx_species), totals%dnj_dstate1_fd(idx_species), 1.0d-7)
         @assertLessThan(rel, tol_species)
-        rel = relative_error(totals%dnj_dstate2(idx_species), totals%dnj_dstate2_fd(idx_species))
+        rel = relative_error(totals%dnj_dstate2(idx_species), totals%dnj_dstate2_fd(idx_species), 1.0d-7)
         @assertLessThan(rel, tol_species)
-        rel = relative_error(totals%dnj_dw0(idx_species, idx_w0), totals%dnj_dw0_fd(idx_species, idx_w0))
+        rel = relative_error(totals%dnj_dw0(idx_species, idx_w0), totals%dnj_dw0_fd(idx_species, idx_w0), 1.0d-7)
         @assertLessThan(rel, tol_species)
 
         rel = relative_error(totals%dn_dstate1, totals%dn_dstate1_fd, 5.0d-4)
@@ -329,6 +331,13 @@ contains
         fd_ln_threshold = (ln_plus - ln_minus)/(2.0d0*h)
         @assertRelativelyEqual(dln_dln_threshold, fd_ln_threshold, 1.0d-6)
         @assertTrue(dln_dln_threshold < 0.0d0)
+
+        call compute_nj_effective(ln_threshold - 1000.0d0*width, ln_threshold, .true., width, nj_eff, &
+                                  dln_nj_eff_dln_nj=dln_dln_nj, &
+                                  dln_nj_eff_dln_threshold=dln_dln_threshold)
+        @assertEqual(0.0d0, nj_eff)
+        @assertRelativelyEqual(1.0d0 + 1.0d0/width, dln_dln_nj, tol)
+        @assertRelativelyEqual(-1.0d0/width, dln_dln_threshold, tol)
 
         call compute_nj_effective(ln_threshold - 0.5d0, ln_threshold, .false., width, nj_eff)
         @assertEqual(0.0d0, nj_eff)
@@ -3409,6 +3418,7 @@ contains
 
             @assertTrue(sol_hard%converged)
             @assertTrue(sol_smooth%converged)
+            @assertEqual(solver_smooth%size, sol_smooth%converged_tsize)
 
             totals_hard = EqDerivatives(solver_hard, sol_hard)
             call totals_hard%compute_derivatives(solver_hard, sol_hard)

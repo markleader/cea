@@ -7,7 +7,9 @@ All notable user-visible changes to this project are documented here.
 ### Changed
 - Reworked equilibrium total-derivative post-processing as a vector-valued
   response Jacobian and reused one Jacobian factorization across all direct
-  sensitivity right-hand sides.
+  sensitivity right-hand sides. Smooth-mode derivatives now analytically
+  differentiate the convergence threshold instead of using finite-difference
+  stabilization for small reported species.
 
 ### Fixed
 

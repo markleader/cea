@@ -167,6 +167,8 @@ module cea_equilibrium
             !! Augmented Newton iteration matrix (oversized!)
         type(EqConstraints) :: constraints
             !! State and element constraints
+        real(dp) :: converged_tsize = 18.420681d0
+            !! Gas truncation scale used when the nonlinear residual converged
         logical, allocatable :: is_active(:)
             !! True if condensed species included in G
         integer, allocatable :: active_rank(:)
@@ -594,20 +596,12 @@ contains
         if (present(g)) g = gate
         if (present(dg_dln)) dg_dln = gate_prime
         if (present(ln_nj_eff)) ln_nj_eff = ln_nj + gate_log
-        if (present(dln_nj_eff_dln_nj)) then
-            if (gate > 0.0d0) then
-                dln_nj_eff_dln_nj = 1.0d0 + gate_prime / gate
-            else
-                dln_nj_eff_dln_nj = 1.0d0
-            end if
-        end if
-        if (present(dln_nj_eff_dln_threshold)) then
-            if (gate > 0.0d0) then
-                dln_nj_eff_dln_threshold = -gate_prime / gate
-            else
-                dln_nj_eff_dln_threshold = 0.0d0
-            end if
-        end if
+        ! g'/g = (1-g)/width. Use this form so the log derivatives
+        ! retain their analytic limiting values when g underflows to zero.
+        if (present(dln_nj_eff_dln_nj)) &
+            dln_nj_eff_dln_nj = 1.0d0 + (1.0d0 - gate)/width
+        if (present(dln_nj_eff_dln_threshold)) &
+            dln_nj_eff_dln_threshold = -(1.0d0 - gate)/width
     end subroutine
 
     pure subroutine compute_reported_nj(ln_nj, log_min, nj, dnj_dln_nj, is_reported)
@@ -1289,6 +1283,7 @@ contains
         ! Check total convergence
         soln%converged = .true.
         soln%times_converged = soln%times_converged + 1
+        soln%converged_tsize = self%tsize
 
         ! Update tsize after initial convergence, and adjust species concentrations
         self%tsize = self%xsize
@@ -2492,6 +2487,7 @@ contains
 
         ! Initialize values
         self%tsize = 18.420681d0  ! Re-set in case solver is being re-used
+        soln%converged_tsize = self%tsize
         times_singular = 0  ! Number of times a singular matrix was encountered
         soln%times_converged = 0  ! Number of times initial convergence was established
         soln%j_switch = 0  ! Make sure this is reset every time
@@ -2773,6 +2769,7 @@ contains
         real(dp) :: P
         real(dp) :: ln_n
         real(dp) :: ln_threshold
+        real(dp) :: derivative_tsize
         real(dp) :: n_delta
         real(dp) :: hsu_delta
         real(dp) :: tmp(solver%num_gas)
@@ -2821,11 +2818,16 @@ contains
         n = solution%n
         P = solution%calc_pressure()
         ln_n = log(n)
+        derivative_tsize = solver%tsize
+        if (solver%smooth_truncation) derivative_tsize = solution%converged_tsize
 
         do i = 1, ng
             ion_species = solver%ions .and. solver%active_ions .and. ne_full > 0 .and. &
                           A_g(i, ne_full) /= 0.0d0
-            ln_threshold = gas_amount_ln_threshold(ln_n, solver%tsize, solver%esize, ion_species)
+            ! Smooth solves converge at size, then switch tsize to xsize for
+            ! final reporting without another nonlinear solve. Differentiate
+            ! the threshold used by the residual that actually converged.
+            ln_threshold = gas_amount_ln_threshold(ln_n, derivative_tsize, solver%esize, ion_species)
             call compute_nj_effective(solution%ln_nj(i), ln_threshold, solver%smooth_truncation, &
                                       solver%truncation_width, nj_eff=nj_eff_g(i), &
                                       ln_nj_eff=ln_nj_eff(i))
@@ -2959,84 +2961,6 @@ contains
 
     end subroutine
 
-    subroutine EqDerivatives_stabilize_smooth_reported_gas_derivatives(solver, solution, dnj_dtheta)
-        ! For very small reported gas species, stabilize the final exposed
-        ! dnj/dx against the solve-level sensitivity of the reported
-        ! post-processing map.
-
-        type(EqSolver), intent(in) :: solver
-        type(EqSolution), intent(in) :: solution
-        real(dp), intent(inout) :: dnj_dtheta(:, :)
-
-        type(EqSolver) :: solver_fd
-        type(EqSolution) :: sol_plus, sol_minus
-        real(dp), allocatable :: w0(:)
-        real(dp) :: state1, state2
-        real(dp) :: h_state1, h_state2, h_w
-        integer :: i, j
-        logical :: needs_stabilization
-        real(dp), parameter :: h_rel = 1.0d-6
-        real(dp), parameter :: reported_floor = 1.0d-8
-
-        needs_stabilization = any(solution%nj(:solver%num_gas) > 0.0d0 .and. &
-                                  solution%nj(:solver%num_gas) <= reported_floor)
-        if (.not. needs_stabilization) return
-
-        solver_fd = solver
-        state1 = solution%constraints%state1
-        state2 = solution%constraints%state2
-        h_state1 = h_rel * max(1.0d0, abs(state1))
-        h_state2 = h_rel * max(1.0d0, abs(state2))
-
-        allocate(w0(size(solution%w0)))
-        w0 = solution%w0
-
-        sol_plus = solution
-        sol_minus = solution
-        sol_plus%cp_fr = 0.0d0
-        sol_minus%cp_fr = 0.0d0
-
-        call solver_fd%solve(sol_plus, solution%constraints%type, state1 + h_state1, state2, w0)
-        call solver_fd%solve(sol_minus, solution%constraints%type, state1 - h_state1, state2, w0)
-        do i = 1, solver%num_gas
-            if (solution%nj(i) > reported_floor .or. solution%nj(i) <= 0.0d0) cycle
-            dnj_dtheta(i, 1) = (sol_plus%nj(i) - sol_minus%nj(i)) / (2.0d0 * h_state1)
-        end do
-
-        sol_plus = solution
-        sol_minus = solution
-        sol_plus%cp_fr = 0.0d0
-        sol_minus%cp_fr = 0.0d0
-
-        call solver_fd%solve(sol_plus, solution%constraints%type, state1, state2 + h_state2, w0)
-        call solver_fd%solve(sol_minus, solution%constraints%type, state1, state2 - h_state2, w0)
-        do i = 1, solver%num_gas
-            if (solution%nj(i) > reported_floor .or. solution%nj(i) <= 0.0d0) cycle
-            dnj_dtheta(i, 2) = (sol_plus%nj(i) - sol_minus%nj(i)) / (2.0d0 * h_state2)
-        end do
-
-        do j = 1, size(w0)
-            h_w = h_rel * max(1.0d0, abs(w0(j)))
-
-            w0(j) = solution%w0(j) + h_w
-            sol_plus = solution
-            sol_plus%cp_fr = 0.0d0
-            call solver_fd%solve(sol_plus, solution%constraints%type, state1, state2, w0)
-
-            w0(j) = solution%w0(j) - h_w
-            sol_minus = solution
-            sol_minus%cp_fr = 0.0d0
-            call solver_fd%solve(sol_minus, solution%constraints%type, state1, state2, w0)
-
-            w0(j) = solution%w0(j)
-            do i = 1, solver%num_gas
-                if (solution%nj(i) > reported_floor .or. solution%nj(i) <= 0.0d0) cycle
-                dnj_dtheta(i, j+2) = (sol_plus%nj(i) - sol_minus%nj(i)) / (2.0d0 * h_w)
-            end do
-        end do
-
-    end subroutine
-
     subroutine EqDerivatives_assemble_Rx(self, solver, solution)
 
         ! Arguments
@@ -3061,6 +2985,7 @@ contains
         real(dp) :: ln_nj_eff(solver%num_gas)   ! Effective log-species concentrations
         real(dp) :: nj_g_eff(solver%num_gas)    ! Effective gas concentrations [kmol-per-kg]
         real(dp) :: ln_threshold                ! Truncation threshold in log-space
+        real(dp) :: derivative_tsize             ! Threshold scale used by the converged residual
         real(dp), pointer :: h_g(:), h_c(:)     ! Gas enthalpies [unitless]
         real(dp), pointer :: s_g(:)             ! Gas entropies [unitless]
         real(dp), pointer :: u_g(:)             ! Gas energies [unitless]
@@ -3101,11 +3026,13 @@ contains
         ! Get the mixture pressure and temperature
         P = solution%calc_pressure()
         T = solution%T
+        derivative_tsize = solver%tsize
+        if (solver%smooth_truncation) derivative_tsize = solution%converged_tsize
 
         ! Compute gas phase chemical potentials
         do i = 1, ng
             ion_species = solver%ions .and. solver%active_ions .and. ne > 0 .and. A_g(i, ne) /= 0.0d0
-            ln_threshold = gas_amount_ln_threshold(log(n), solver%tsize, solver%esize, ion_species)
+            ln_threshold = gas_amount_ln_threshold(log(n), derivative_tsize, solver%esize, ion_species)
             call compute_nj_effective(ln_nj(i), ln_threshold, solver%smooth_truncation, solver%truncation_width, &
                                       nj_eff=nj_g_eff(i), ln_nj_eff=ln_nj_eff(i))
         end do
@@ -3285,6 +3212,7 @@ contains
         real(dp) :: n, P, T, fac
         real(dp) :: w_sum, inv_w_sum
         real(dp) :: ln_n, log_p_over_n, ln_threshold
+        real(dp) :: derivative_tsize
         real(dp) :: nj_tmp, a_smooth, c_smooth
         real(dp) :: sum_h, sum_dh_dT, sum_ds_dT, sum_dcp_dT
         real(dp) :: entropy_sum, entropy_dim
@@ -3342,6 +3270,8 @@ contains
         fac = R / 1.0d3
         ln_n = log(n)
         log_p_over_n = log(P/n)
+        derivative_tsize = solver%tsize
+        if (solver%smooth_truncation) derivative_tsize = solution%converged_tsize
 
         do i = 1, ng
             dh_g_dT(i) = solver%products%species(i)%calc_denthalpy_dT(T)/T - h_g(i)/T
@@ -3414,7 +3344,7 @@ contains
         allocate(nj_g_eff(ng), dln_nj_eff_dln_nj(ng), dln_nj_eff_dln_threshold(ng))
         do i = 1, ng
             ion_species = solver%ions .and. solver%active_ions .and. ne > 0 .and. A_g(i, ne) /= 0.0d0
-            ln_threshold = gas_amount_ln_threshold(ln_n, solver%tsize, solver%esize, ion_species)
+            ln_threshold = gas_amount_ln_threshold(ln_n, derivative_tsize, solver%esize, ion_species)
             call compute_nj_effective(ln_nj(i), ln_threshold, solver%smooth_truncation, &
                                       solver%truncation_width, nj_eff=nj_g_eff(i), &
                                       dln_nj_eff_dln_nj=dln_nj_eff_dln_nj(i), &
@@ -3455,10 +3385,6 @@ contains
         do idx_c = 1, na
             dnj_dtheta(ng+idx_c, :) = dudtheta(ne+idx_c, :)
         end do
-
-        if (solver%smooth_truncation) then
-            call EqDerivatives_stabilize_smooth_reported_gas_derivatives(solver, solution, dnj_dtheta)
-        end if
 
         allocate(nj_active(ns), h_active(ns), s_coeff_active(ns), cp_active(ns))
         nj_active(:ng) = nj_g
